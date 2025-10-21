@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>授权 - Copilot OpenAI Proxy</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div class="container mx-auto px-4 py-8 max-w-2xl">
+    <!-- Header -->
+    <div class="text-center mb-8">
+      <h1 class="text-4xl font-bold text-gray-900 mb-2">🔐 GitHub 授权</h1>
+      <p class="text-gray-600">按照以下步骤完成授权</p>
+    </div>
+
+    <!-- Authorization Steps -->
+    <div class="bg-white rounded-lg shadow-md p-6">
+      <!-- Step 1: Copy Code -->
+      <div class="mb-8">
+        <div class="flex items-center mb-4">
+          <div class="flex-shrink-0 w-10 h-10 bg-blue-500 text-white rounded-full flex items-center justify-center font-bold">
+            1
+          </div>
+          <h3 class="ml-3 text-xl font-semibold">复制验证码</h3>
+        </div>
+        
+        <div class="ml-13 bg-gray-50 p-4 rounded-lg border-2 border-gray-200">
+          <p class="text-sm text-gray-600 mb-2">验证码：</p>
+          <div class="flex items-center gap-3">
+            <code id="userCode" class="text-3xl font-mono font-bold text-blue-600 tracking-wider">
+              <%= deviceCode.user_code %>
+            </code>
+            <button onclick="copyCode()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+              复制
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: Visit GitHub -->
+      <div class="mb-8">
+        <div class="flex items-center mb-4">
+          <div class="flex-shrink-0 w-10 h-10 bg-blue-500 text-white rounded-full flex items-center justify-center font-bold">
+            2
+          </div>
+          <h3 class="ml-3 text-xl font-semibold">访问 GitHub 授权页面</h3>
+        </div>
+        
+        <div class="ml-13">
+          <a href="<%= deviceCode.verification_uri %>" target="_blank" 
+             class="inline-block bg-gray-900 hover:bg-gray-800 text-white px-6 py-3 rounded-lg font-medium transition">
+            🔗 打开 GitHub 授权页面
+          </a>
+          <p class="text-sm text-gray-500 mt-2">
+            或访问: <code class="bg-gray-100 px-2 py-1 rounded"><%= deviceCode.verification_uri %></code>
+          </p>
+        </div>
+      </div>
+
+      <!-- Step 3: Authorize -->
+      <div class="mb-8">
+        <div class="flex items-center mb-4">
+          <div class="flex-shrink-0 w-10 h-10 bg-blue-500 text-white rounded-full flex items-center justify-center font-bold">
+            3
+          </div>
+          <h3 class="ml-3 text-xl font-semibold">输入验证码并授权</h3>
+        </div>
+        
+        <div class="ml-13">
+          <p class="text-gray-600">在 GitHub 页面中粘贴验证码并完成授权</p>
+        </div>
+      </div>
+
+      <!-- Status -->
+      <div class="border-t pt-6">
+        <div id="status" class="text-center">
+          <div class="inline-flex items-center text-blue-600">
+            <svg class="animate-spin h-5 w-5 mr-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span class="text-lg font-medium">等待授权中...</span>
+          </div>
+          <p class="text-sm text-gray-500 mt-2" id="countdown"></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Back Button -->
+    <div class="text-center mt-6">
+      <a href="/" class="text-blue-500 hover:text-blue-600 hover:underline">
+        ← 返回首页
+      </a>
+    </div>
+  </div>
+
+  <script>
+    const deviceCode = '<%= deviceCode.device_code %>'
+    let pollCount = 0
+    const maxPolls = 120 // 10 minutes
+
+    function copyCode() {
+      const code = document.getElementById('userCode').textContent.trim()
+      navigator.clipboard.writeText(code).then(() => {
+        alert('验证码已复制到剪贴板！')
+      }).catch(err => {
+        console.error('Failed to copy:', err)
+      })
+    }
+
+    async function pollAuth() {
+      if (pollCount >= maxPolls) {
+        document.getElementById('status').innerHTML = `
+          <div class="text-red-600">
+            <svg class="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <p class="text-lg font-medium">授权超时</p>
+            <a href="/auth" class="text-blue-500 hover:underline mt-2 inline-block">重新开始</a>
+          </div>
+        `
+        return
+      }
+
+      pollCount++
+      const remaining = maxPolls - pollCount
+      document.getElementById('countdown').textContent = 
+        `剩余时间: ${Math.floor(remaining * 5 / 60)} 分钟 (${pollCount}/${maxPolls})`
+
+      try {
+        const response = await fetch('/api/poll-auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_code: deviceCode })
+        })
+
+        const data = await response.json()
+
+        if (data.success && data.authorized) {
+          // Success!
+          document.getElementById('status').innerHTML = `
+            <div class="text-green-600">
+              <svg class="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+              </svg>
+              <p class="text-lg font-medium">授权成功！</p>
+              <p class="text-sm mt-2">正在跳转...</p>
+            </div>
+          `
+          setTimeout(() => {
+            window.location.href = '/success'
+          }, 1500)
+        } else if (data.pending) {
+          // Still waiting
+          setTimeout(pollAuth, 5000) // Poll every 5 seconds
+        } else {
+          // Error
+          document.getElementById('status').innerHTML = `
+            <div class="text-red-600">
+              <p class="text-lg font-medium">授权失败</p>
+              <p class="text-sm mt-2">${data.error || '未知错误'}</p>
+              <a href="/auth" class="text-blue-500 hover:underline mt-2 inline-block">重新开始</a>
+            </div>
+          `
+        }
+      } catch (error) {
+        console.error('Poll error:', error)
+        setTimeout(pollAuth, 5000)
+      }
+    }
+
+    // Start polling
+    setTimeout(pollAuth, 5000)
+  </script>
+</body>
+</html>

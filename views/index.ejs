@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Copilot OpenAI Proxy</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div class="container mx-auto px-4 py-8 max-w-4xl">
+    <!-- Header -->
+    <div class="text-center mb-8">
+      <h1 class="text-4xl font-bold text-gray-900 mb-2">🤖 Copilot OpenAI Proxy</h1>
+      <p class="text-gray-600">将 GitHub Copilot 转换为标准 OpenAI API</p>
+    </div>
+
+    <!-- Status Card -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+      <h2 class="text-2xl font-semibold mb-4">状态</h2>
+      
+      <% if (status.authorized) { %>
+        <!-- Authorized Status -->
+        <div class="flex items-center mb-4">
+          <div class="flex-shrink-0">
+            <svg class="w-12 h-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+          </div>
+          <div class="ml-4">
+            <p class="text-xl font-semibold text-green-600">✅ 已授权</p>
+            <p class="text-gray-600">GitHub 用户: <strong><%= status.user?.login || 'Unknown' %></strong></p>
+            <% if (status.expiresAt) { %>
+              <p class="text-sm text-gray-500">Token 有效期至: <%= new Date(status.expiresAt * 1000).toLocaleString('zh-CN') %></p>
+            <% } %>
+          </div>
+        </div>
+
+        <div class="flex gap-3 mt-4">
+          <button onclick="testAPI()" class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg font-medium transition">
+            测试 API
+          </button>
+          <button onclick="logout()" class="bg-red-500 hover:bg-red-600 text-white px-6 py-2 rounded-lg font-medium transition">
+            退出登录
+          </button>
+        </div>
+      <% } else { %>
+        <!-- Not Authorized Status -->
+        <div class="flex items-center mb-4">
+          <div class="flex-shrink-0">
+            <svg class="w-12 h-12 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+            </svg>
+          </div>
+          <div class="ml-4">
+            <p class="text-xl font-semibold text-yellow-600">⚠️ 未授权</p>
+            <p class="text-gray-600">请先完成 GitHub 授权</p>
+          </div>
+        </div>
+
+        <a href="/auth" class="inline-block bg-blue-500 hover:bg-blue-600 text-white px-8 py-3 rounded-lg font-medium transition">
+          开始授权
+        </a>
+      <% } %>
+    </div>
+
+    <!-- API Information -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+      <h2 class="text-2xl font-semibold mb-4">API 端点</h2>
+      
+      <div class="space-y-4">
+        <div>
+          <p class="text-sm font-medium text-gray-700 mb-1">Chat Completions</p>
+          <code class="block bg-gray-100 p-3 rounded text-sm">POST http://localhost:3000/v1/chat/completions</code>
+        </div>
+        
+        <div>
+          <p class="text-sm font-medium text-gray-700 mb-1">Models</p>
+          <code class="block bg-gray-100 p-3 rounded text-sm">GET http://localhost:3000/v1/models</code>
+        </div>
+      </div>
+    </div>
+
+    <!-- Usage Example -->
+    <div class="bg-white rounded-lg shadow-md p-6">
+      <h2 class="text-2xl font-semibold mb-4">使用示例</h2>
+      
+      <div class="mb-4">
+        <p class="text-sm font-medium text-gray-700 mb-2">cURL 请求示例：</p>
+        <pre class="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto text-sm"><code>curl http://localhost:3000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'</code></pre>
+      </div>
+
+      <div>
+        <p class="text-sm font-medium text-gray-700 mb-2">Python 示例：</p>
+        <pre class="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto text-sm"><code>from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:3000/v1",
+    api_key="dummy-key"  # 可以是任意值
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "user", "content": "Hello!"}
+    ]
+)
+
+print(response.choices[0].message.content)</code></pre>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="text-center mt-8 text-gray-500 text-sm">
+      <p>Powered by GitHub Copilot | <a href="https://github.com" class="text-blue-500 hover:underline">View on GitHub</a></p>
+    </div>
+  </div>
+
+  <script>
+    async function testAPI() {
+      try {
+        const response = await fetch('/api/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        })
+        const data = await response.json()
+        
+        if (data.choices && data.choices[0]) {
+          alert('测试成功！\n\n响应: ' + data.choices[0].message.content)
+        } else {
+          alert('测试失败: ' + JSON.stringify(data))
+        }
+      } catch (error) {
+        alert('测试失败: ' + error.message)
+      }
+    }
+
+    async function logout() {
+      if (!confirm('确定要退出登录吗？')) return
+      
+      try {
+        await fetch('/api/logout', { method: 'POST' })
+        location.reload()
+      } catch (error) {
+        alert('退出失败: ' + error.message)
+      }
+    }
+  </script>
+</body>
+</html>

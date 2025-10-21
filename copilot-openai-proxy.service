@@ -1,0 +1,21 @@
+[Unit]
+Description=Copilot OpenAI Proxy Server
+Documentation=https://github.com/copilot-openai-proxy
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/user/桌面/code/copilot-openai-proxy
+ExecStart=/usr/bin/node /home/user/桌面/code/copilot-openai-proxy/dist/index.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=copilot-proxy
+
+# Environment
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+[Install]
+WantedBy=default.target
