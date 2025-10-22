@@ -5,6 +5,7 @@
 ## ✨ 特性
 
 - 🔄 **OpenAI API 兼容** - 完全兼容 OpenAI Chat Completions API
+- 🖼️ **多模态支持** - 支持图片输入（文本 + 图片）
 - 🔐 **安全授权** - 使用 GitHub OAuth Device Flow 进行授权
 - 🎨 **友好的 Web UI** - 可视化的授权流程和状态管理
 - 💾 **本地存储** - Token 安全存储在本地文件
@@ -44,6 +45,8 @@ npm run dev
 
 ### OpenAI SDK (Python)
 
+#### 基础文本对话
+
 ```python
 from openai import OpenAI
 
@@ -62,7 +65,70 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+#### 图片识别（多模态）
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:3000/v1",
+    api_key="dummy-key"
+)
+
+# 使用图片 URL
+response = client.chat.completions.create(
+    model="gpt-4o",  # 需要使用支持视觉的模型
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "这张图片里有什么？"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.com/image.jpg"
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+
+# 或使用 base64 编码的图片
+import base64
+
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+base64_image = encode_image("path/to/image.jpg")
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "描述这张图片"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{base64_image}"
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
 ### cURL
+
+#### 基础文本对话
 
 ```bash
 curl http://localhost:3000/v1/chat/completions \
@@ -72,6 +138,31 @@ curl http://localhost:3000/v1/chat/completions \
     "messages": [
       {"role": "user", "content": "Hello!"}
     ]
+  }'
+```
+
+#### 图片识别
+
+```bash
+curl http://localhost:3000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "这张图片里有什么？"
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "https://example.com/image.jpg"
+          }
+        }
+      ]
+    }]
   }'
 ```
 
@@ -114,13 +205,22 @@ POST /v1/chat/completions
 
 ### 支持的模型
 
-- `gpt-4o` - GPT-4 Omni
-- `gpt-4o-mini` - GPT-4 Omni Mini
+- `gpt-4o` - GPT-4 Omni 🖼️ (支持视觉)
+- `gpt-4o-mini` - GPT-4 Omni Mini 🖼️ (支持视觉)
 - `gpt-4` - GPT-4
 - `gpt-3.5-turbo` - GPT-3.5 Turbo
-- `o1-preview` - O1 Preview
-- `o1-mini` - O1 Mini
-- `claude-3.5-sonnet` - Claude 3.5 Sonnet
+- `o1-preview` - O1 Preview 🖼️ (支持视觉)
+- `o1-mini` - O1 Mini 🖼️ (支持视觉)
+- `claude-3.5-sonnet` - Claude 3.5 Sonnet 🖼️ (支持视觉)
+
+**注意**: 带有 🖼️ 标记的模型支持图片输入（多模态）。
+
+### 获取支持视觉的模型列表
+
+```bash
+curl http://localhost:3000/v1/models/vision \
+  -H "Authorization: Bearer dummy-key"
+```
 
 ### 列出模型
 
@@ -152,6 +252,7 @@ copilot-openai-proxy/
 │   ├── index.ts          # 服务器入口
 │   ├── copilot.ts        # Copilot 认证服务
 │   ├── storage.ts        # 文件存储
+│   ├── auth.ts           # 认证中间件
 │   └── types.ts          # 类型定义
 ├── views/
 │   ├── index.ejs         # 首页
@@ -159,8 +260,32 @@ copilot-openai-proxy/
 │   └── success.ejs       # 成功页面
 ├── data/
 │   └── auth.json         # Token 存储（自动生成）
+├── test.sh               # 基础测试脚本
+├── test-vision.sh        # 图片功能测试脚本
 └── package.json
 ```
+
+## 🧪 测试
+
+### 运行基础测试
+
+```bash
+./test.sh YOUR_API_KEY
+```
+
+### 运行图片支持测试
+
+```bash
+./test-vision.sh YOUR_API_KEY
+```
+
+测试脚本会验证以下功能：
+- ✅ 获取支持视觉的模型列表
+- ✅ 纯文本对话
+- ✅ 图片 URL 输入
+- ✅ Base64 图片输入
+- ✅ 错误处理（非视觉模型使用图片）
+- ✅ 格式验证（无效的图片格式）
 
 ## 🔒 安全性
 

@@ -145,6 +145,44 @@ app.post('/v1/chat/completions', authMiddleware, async (req: Request, res: Respo
         const token = await copilotService.getValidCopilotToken()
         const body: OpenAIChatCompletionRequest = req.body
 
+        // 检查是否为视觉模型
+        const isVision = await copilotService.isVisionModel(body.model)
+        
+        if (isVision) {
+            console.log(`Model ${body.model} supports vision`)
+        }
+
+        // 验证消息内容格式
+        for (const message of body.messages) {
+            if (Array.isArray(message.content)) {
+                // 检查是否为非视觉模型使用了多模态内容
+                if (!isVision) {
+                    return res.status(400).json({
+                        error: {
+                            message: `Model ${body.model} does not support vision/multimodal content`,
+                            type: 'invalid_request_error',
+                            code: 'model_not_support_vision'
+                        }
+                    })
+                }
+                
+                // 验证图片内容格式
+                for (const part of message.content) {
+                    if (part.type === 'image_url') {
+                        if (!part.image_url?.url) {
+                            return res.status(400).json({
+                                error: {
+                                    message: 'Invalid image_url format: url is required',
+                                    type: 'invalid_request_error',
+                                    code: 'invalid_image_url'
+                                }
+                            })
+                        }
+                    }
+                }
+            }
+        }
+
         const response = await fetch('https://api.githubcopilot.com/chat/completions', {
             method: 'POST',
             headers: {
@@ -153,7 +191,8 @@ app.post('/v1/chat/completions', authMiddleware, async (req: Request, res: Respo
                 'Editor-Version': 'vscode/1.104.1',
                 'Editor-Plugin-Version': 'copilot-chat/0.26.7',
                 'User-Agent': 'GitHubCopilotChat/0.26.7',
-                'Copilot-Integration-Id': 'vscode-chat'
+                'Copilot-Integration-Id': 'vscode-chat',
+                ...(isVision ? { 'copilot-vision-request': 'true' } : {})
             },
             body: JSON.stringify(body)
         })
@@ -169,6 +208,25 @@ app.post('/v1/chat/completions', authMiddleware, async (req: Request, res: Respo
             const data = await response.json()
             res.json(data)
         }
+    } catch (error) {
+        res.status(500).json({
+            error: {
+                message: (error as Error).message,
+                type: 'proxy_error',
+                code: 'internal_error'
+            }
+        })
+    }
+})
+
+// Get vision models list (debug endpoint)
+app.get('/v1/models/vision', authMiddleware, async (req: Request, res: Response) => {
+    try {
+        const visionModels = await copilotService.getVisionModels()
+        res.json({
+            object: 'list',
+            data: visionModels
+        })
     } catch (error) {
         res.status(500).json({
             error: {
