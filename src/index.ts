@@ -3,8 +3,10 @@ import path from 'path'
 import fetch from 'node-fetch'
 import {copilotService} from './copilot'
 import {storage} from './storage'
-import {OpenAIChatCompletionRequest} from './types'
+import {OpenAIChatCompletionRequest, ClaudeMessageRequest} from './types'
 import {authMiddleware} from './auth'
+import {FormatConverter} from './converter'
+import {Transform} from 'stream'
 
 const app = express()
 const PORT = process.env.PORT || 3000
@@ -235,6 +237,169 @@ app.get('/v1/models/vision', authMiddleware, async (req: Request, res: Response)
                 code: 'internal_error'
             }
         })
+    }
+})
+
+// ==================== Claude API Compatible Endpoints ====================
+
+// Claude API: Create a message
+app.post('/v1/messages', authMiddleware, async (req: Request, res: Response) => {
+    try {
+        console.log('[Claude API] Received request to /v1/messages')
+        
+        // 验证 anthropic-version header
+        const anthropicVersion = req.headers['anthropic-version'] as string | undefined
+        if (!anthropicVersion) {
+            console.warn('[Claude API] Missing anthropic-version header')
+            // 不强制要求，但记录警告
+        } else {
+            console.log(`[Claude API] anthropic-version: ${anthropicVersion}`)
+        }
+
+        const claudeRequest = req.body as ClaudeMessageRequest
+
+        // 验证 Claude 请求格式
+        const validation = FormatConverter.validateClaudeRequest(claudeRequest)
+        if (!validation.valid) {
+            console.error(`[Claude API] Validation failed: ${validation.error}`)
+            const error = FormatConverter.createClaudeError(
+                'invalid_request_error',
+                validation.error!,
+                400
+            )
+            return res.status(error.statusCode).json(error.body)
+        }
+
+        console.log(`[Claude API] Request validated - Model: ${claudeRequest.model}, Stream: ${claudeRequest.stream || false}`)
+
+        // 转换 Claude 请求为 OpenAI 格式
+        const openAIRequest = FormatConverter.claudeToOpenAI(claudeRequest)
+        console.log(`[Claude API] Converted to OpenAI format`)
+
+        // 获取 Copilot token
+        const token = await copilotService.getValidCopilotToken()
+
+        // 检查是否为视觉模型
+        const isVision = await copilotService.isVisionModel(openAIRequest.model)
+        if (isVision) {
+            console.log(`[Claude API] Model ${openAIRequest.model} supports vision`)
+        }
+
+        // 调用 Copilot API
+        const response = await fetch('https://api.githubcopilot.com/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+                'Editor-Version': 'vscode/1.104.1',
+                'Editor-Plugin-Version': 'copilot-chat/0.26.7',
+                'User-Agent': 'GitHubCopilotChat/0.26.7',
+                'Copilot-Integration-Id': 'vscode-chat',
+                ...(isVision ? { 'copilot-vision-request': 'true' } : {})
+            },
+            body: JSON.stringify(openAIRequest)
+        })
+
+        if (!response.ok) {
+            const errorText = await response.text()
+            console.error(`[Claude API] Copilot API error: ${response.status} - ${errorText}`)
+            const error = FormatConverter.createClaudeError(
+                'api_error',
+                `Upstream API error: ${response.statusText}`,
+                response.status
+            )
+            return res.status(error.statusCode).json(error.body)
+        }
+
+        // 处理流式响应
+        if (claudeRequest.stream) {
+            console.log('[Claude API] Streaming response')
+            
+            res.setHeader('Content-Type', 'text/event-stream')
+            res.setHeader('Cache-Control', 'no-cache')
+            res.setHeader('Connection', 'keep-alive')
+
+            let isFirstChunk = true
+            let buffer = ''
+
+            // 创建转换流
+            const transformStream = new Transform({
+                transform(chunk: Buffer, encoding: string, callback: Function) {
+                    try {
+                        buffer += chunk.toString()
+                        const lines = buffer.split('\n')
+                        buffer = lines.pop() || ''
+
+                        for (const line of lines) {
+                            if (line.trim()) {
+                                const converted = FormatConverter.transformStreamChunk(
+                                    line + '\n',
+                                    isFirstChunk,
+                                    claudeRequest.model
+                                )
+                                if (converted) {
+                                    this.push(converted)
+                                    isFirstChunk = false
+                                }
+                            }
+                        }
+                        callback()
+                    } catch (error) {
+                        console.error('[Claude API] Stream transform error:', error)
+                        callback(error)
+                    }
+                },
+                flush(callback: Function) {
+                    if (buffer.trim()) {
+                        try {
+                            const converted = FormatConverter.transformStreamChunk(
+                                buffer,
+                                isFirstChunk,
+                                claudeRequest.model
+                            )
+                            if (converted) {
+                                this.push(converted)
+                            }
+                        } catch (error) {
+                            console.error('[Claude API] Stream flush error:', error)
+                        }
+                    }
+                    callback()
+                }
+            })
+
+            response.body?.pipe(transformStream).pipe(res)
+
+            // 处理错误
+            transformStream.on('error', (error) => {
+                console.error('[Claude API] Transform stream error:', error)
+                res.end()
+            })
+
+            res.on('close', () => {
+                console.log('[Claude API] Client closed connection')
+            })
+        } else {
+            // 非流式响应
+            console.log('[Claude API] Non-streaming response')
+            
+            const openAIResponse = await response.json()
+            const claudeResponse = FormatConverter.openAIToClaude(
+                openAIResponse,
+                claudeRequest.model
+            )
+
+            console.log(`[Claude API] Response generated - Stop reason: ${claudeResponse.stop_reason}`)
+            res.json(claudeResponse)
+        }
+    } catch (error) {
+        console.error('[Claude API] Error:', error)
+        const errorResponse = FormatConverter.createClaudeError(
+            'internal_server_error',
+            (error as Error).message,
+            500
+        )
+        res.status(errorResponse.statusCode).json(errorResponse.body)
     }
 })
 

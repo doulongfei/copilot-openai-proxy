@@ -16,6 +16,7 @@ SyslogIdentifier=copilot-proxy
 # Environment
 Environment=NODE_ENV=production
 Environment=PORT=3000
+Environment=ACCESS_TOKEN=lfdou,openaiapi
 
 [Install]
 WantedBy=default.target

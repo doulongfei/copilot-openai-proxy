@@ -155,3 +155,119 @@ export interface ModelsResponse {
   object: string
   data: ModelInfo[]
 }
+
+// ==================== Claude API Types ====================
+
+// Claude Message Content Types
+export interface ClaudeTextContent {
+  type: 'text'
+  text: string
+}
+
+export interface ClaudeImageContent {
+  type: 'image'
+  source: {
+    type: 'base64' | 'url'
+    media_type: string
+    data?: string
+    url?: string
+  }
+}
+
+export interface ClaudeToolUseContent {
+  type: 'tool_use'
+  id: string
+  name: string
+  input: any
+}
+
+export interface ClaudeToolResultContent {
+  type: 'tool_result'
+  tool_use_id: string
+  content?: string | Array<ClaudeTextContent | ClaudeImageContent>
+  is_error?: boolean
+}
+
+export type ClaudeContentBlock = 
+  | ClaudeTextContent 
+  | ClaudeImageContent 
+  | ClaudeToolUseContent 
+  | ClaudeToolResultContent
+
+// Claude Message Types
+export interface ClaudeMessage {
+  role: 'user' | 'assistant'
+  content: string | ClaudeContentBlock[]
+}
+
+// Claude Tool Definition
+export interface ClaudeTool {
+  name: string
+  description?: string
+  input_schema: {
+    type: 'object'
+    properties: Record<string, any>
+    required?: string[]
+  }
+}
+
+// Claude Tool Choice
+export type ClaudeToolChoice = 
+  | { type: 'auto' }
+  | { type: 'any' }
+  | { type: 'tool'; name: string }
+
+// Claude Request
+export interface ClaudeMessageRequest {
+  model: string
+  messages: ClaudeMessage[]
+  max_tokens: number
+  metadata?: {
+    user_id?: string
+  }
+  stop_sequences?: string[]
+  stream?: boolean
+  system?: string | Array<{ type: 'text'; text: string }>
+  temperature?: number
+  top_k?: number
+  top_p?: number
+  tools?: ClaudeTool[]
+  tool_choice?: ClaudeToolChoice
+}
+
+// Claude Response
+export interface ClaudeMessageResponse {
+  id: string
+  type: 'message'
+  role: 'assistant'
+  content: ClaudeContentBlock[]
+  model: string
+  stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | null
+  stop_sequence: string | null
+  usage: {
+    input_tokens: number
+    output_tokens: number
+  }
+}
+
+// Claude Streaming Events
+export interface ClaudeStreamEvent {
+  type: 'message_start' | 'content_block_start' | 'content_block_delta' | 'content_block_stop' | 'message_delta' | 'message_stop' | 'ping' | 'error'
+  index?: number
+  message?: Partial<ClaudeMessageResponse>
+  content_block?: ClaudeContentBlock
+  delta?: {
+    type: 'text_delta' | 'input_json_delta'
+    text?: string
+    partial_json?: string
+    stop_reason?: string
+    stop_sequence?: string | null
+  }
+  usage?: {
+    output_tokens: number
+  }
+  error?: {
+    type: string
+    message: string
+  }
+}

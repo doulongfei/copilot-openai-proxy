@@ -1,10 +1,10 @@
 # 🤖 Copilot OpenAI Proxy
 
-将 GitHub Copilot 转换为标准 OpenAI API 的代理服务器。
+将 GitHub Copilot 转换为标准 OpenAI API 和 Claude API 的代理服务器。
 
 ## ✨ 特性
 
-- 🔄 **OpenAI API 兼容** - 完全兼容 OpenAI Chat Completions API
+- 🔄 **双 API 格式支持** - 同时兼容 OpenAI 和 Claude API 格式
 - 🖼️ **多模态支持** - 支持图片输入（文本 + 图片）
 - 🔐 **安全授权** - 使用 GitHub OAuth Device Flow 进行授权
 - 🎨 **友好的 Web UI** - 可视化的授权流程和状态管理
@@ -188,7 +188,9 @@ console.log(data.choices[0].message.content)
 
 ## 🎯 API 端点
 
-### Chat Completions
+本代理同时支持 **OpenAI** 和 **Claude** 两种 API 格式！
+
+### OpenAI 格式: Chat Completions
 
 ```
 POST /v1/chat/completions
@@ -202,6 +204,44 @@ POST /v1/chat/completions
 - `max_tokens` - 最大 token 数
 - `stream` - 是否启用流式响应
 - 其他 OpenAI API 标准参数
+
+### Claude 格式: Messages
+
+```
+POST /v1/messages
+```
+
+兼容 Claude Messages API，支持以下参数：
+
+- `model` - 模型名称（必需）
+- `messages` - 消息数组（必需）
+- `max_tokens` - 最大 token 数（必需）
+- `system` - 系统提示词
+- `temperature` - 温度参数 (0-1)
+- `top_p` / `top_k` - 采样参数
+- `stream` - 是否启用流式响应
+- 其他 Claude API 标准参数
+
+**示例 (Claude 格式):**
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(
+    api_key="dummy-key",
+    base_url="http://localhost:3000"
+)
+
+message = client.messages.create(
+    model="gpt-4o",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+
+print(message.content[0].text)
+```
+
+📘 **详细文档**: [CLAUDE_API.md](CLAUDE_API.md)
 
 ### 支持的模型
 
@@ -267,7 +307,7 @@ copilot-openai-proxy/
 
 ## 🧪 测试
 
-### 运行基础测试
+### 运行 OpenAI 格式测试
 
 ```bash
 ./test.sh YOUR_API_KEY
@@ -279,13 +319,30 @@ copilot-openai-proxy/
 ./test-vision.sh YOUR_API_KEY
 ```
 
+### 运行 Claude 格式测试
+
+```bash
+./test-claude.sh
+```
+
 测试脚本会验证以下功能：
+
+**OpenAI 格式测试 (test.sh):**
 - ✅ 获取支持视觉的模型列表
 - ✅ 纯文本对话
 - ✅ 图片 URL 输入
 - ✅ Base64 图片输入
 - ✅ 错误处理（非视觉模型使用图片）
 - ✅ 格式验证（无效的图片格式）
+
+**Claude 格式测试 (test-claude.sh):**
+- ✅ 基础文本对话（非流式）
+- ✅ 系统提示词支持
+- ✅ 温度参数
+- ✅ 多轮对话
+- ✅ 流式响应
+- ✅ 图片支持（多模态）
+- ✅ 错误处理
 
 ## 🔒 安全性
 

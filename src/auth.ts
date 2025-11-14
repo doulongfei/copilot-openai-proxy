@@ -3,7 +3,8 @@ import { Request, Response, NextFunction } from 'express'
 /**
  * Authentication middleware for API endpoints
  * - Allows localhost access without authentication
- * - Requires Bearer token authentication for remote access
+ * - Requires Bearer token or x-api-key authentication for remote access
+ * - Supports both OpenAI (Authorization: Bearer) and Claude (x-api-key) formats
  */
 export function authMiddleware(req: Request, res: Response, next: NextFunction) {
   // Get client IP address
@@ -22,34 +23,53 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
     return next()
   }
   
-  // For remote access, require authentication
+  // For remote access, check for either Authorization header or x-api-key
   const authHeader = req.headers.authorization
+  const xApiKey = req.headers['x-api-key'] as string | undefined
   
-  if (!authHeader) {
-    console.log(`[Auth] No authorization header from ${clientIp}`)
-    return res.status(401).json({
-      error: {
-        message: 'Authorization required. Please provide a valid Bearer token.',
-        type: 'authentication_error',
-        code: 'missing_authorization'
-      }
-    })
+  let token: string | null = null
+  let authType: 'bearer' | 'claude' | null = null
+  
+  // Try Bearer token first (OpenAI format)
+  if (authHeader) {
+    const tokenMatch = authHeader.match(/^Bearer\s+(.+)$/i)
+    if (tokenMatch) {
+      token = tokenMatch[1]
+      authType = 'bearer'
+    }
   }
   
-  // Check Bearer token format
-  const tokenMatch = authHeader.match(/^Bearer\s+(.+)$/i)
-  if (!tokenMatch) {
-    console.log(`[Auth] Invalid authorization format from ${clientIp}`)
-    return res.status(401).json({
-      error: {
-        message: 'Invalid authorization format. Use: Authorization: Bearer <token>',
-        type: 'authentication_error',
-        code: 'invalid_authorization_format'
-      }
-    })
+  // If no Bearer token, try x-api-key (Claude format)
+  if (!token && xApiKey) {
+    token = xApiKey
+    authType = 'claude'
   }
   
-  const token = tokenMatch[1]
+  // If no authentication provided
+  if (!token) {
+    console.log(`[Auth] No authentication provided from ${clientIp}`)
+    
+    // Return appropriate error based on the request path
+    const isClaudeEndpoint = req.path.includes('/v1/messages')
+    
+    if (isClaudeEndpoint) {
+      return res.status(401).json({
+        type: 'error',
+        error: {
+          type: 'authentication_error',
+          message: 'Authentication required. Please provide x-api-key header.'
+        }
+      })
+    } else {
+      return res.status(401).json({
+        error: {
+          message: 'Authorization required. Please provide a valid Bearer token or x-api-key.',
+          type: 'authentication_error',
+          code: 'missing_authorization'
+        }
+      })
+    }
+  }
   
   // Get allowed tokens from environment variable
   const allowedTokens = process.env.ACCESS_TOKEN 
@@ -59,27 +79,53 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
   // If no tokens configured, reject remote access
   if (allowedTokens.length === 0) {
     console.log(`[Auth] No access tokens configured, rejecting remote access from ${clientIp}`)
-    return res.status(401).json({
-      error: {
-        message: 'Remote access is not configured. Please set ACCESS_TOKEN environment variable.',
-        type: 'authentication_error',
-        code: 'remote_access_disabled'
-      }
-    })
+    
+    const isClaudeEndpoint = req.path.includes('/v1/messages')
+    
+    if (isClaudeEndpoint) {
+      return res.status(401).json({
+        type: 'error',
+        error: {
+          type: 'authentication_error',
+          message: 'Remote access is not configured. Please set ACCESS_TOKEN environment variable.'
+        }
+      })
+    } else {
+      return res.status(401).json({
+        error: {
+          message: 'Remote access is not configured. Please set ACCESS_TOKEN environment variable.',
+          type: 'authentication_error',
+          code: 'remote_access_disabled'
+        }
+      })
+    }
   }
   
   // Validate token
   if (allowedTokens.includes(token)) {
-    console.log(`[Auth] Valid token provided from ${clientIp}`)
+    console.log(`[Auth] Valid ${authType} token provided from ${clientIp}`)
     return next()
   }
   
   console.log(`[Auth] Invalid token from ${clientIp}`)
-  return res.status(401).json({
-    error: {
-      message: 'Invalid access token.',
-      type: 'authentication_error',
-      code: 'invalid_token'
-    }
-  })
+  
+  const isClaudeEndpoint = req.path.includes('/v1/messages')
+  
+  if (isClaudeEndpoint) {
+    return res.status(401).json({
+      type: 'error',
+      error: {
+        type: 'authentication_error',
+        message: 'Invalid API key.'
+      }
+    })
+  } else {
+    return res.status(401).json({
+      error: {
+        message: 'Invalid access token.',
+        type: 'authentication_error',
+        code: 'invalid_token'
+      }
+    })
+  }
 }
