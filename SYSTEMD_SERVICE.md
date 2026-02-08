@@ -80,8 +80,8 @@ systemctl --user disable copilot-openai-proxy
 ## 📂 服务文件位置
 
 - **服务定义文件**: `~/.config/systemd/user/copilot-openai-proxy.service`
-- **项目工作目录**: `/home/user/桌面/code/copilot-openai-proxy`
-- **可执行文件**: `/home/user/桌面/code/copilot-openai-proxy/dist/index.js`
+- **项目工作目录**: `/path/to/your/copilot-openai-proxy`
+- **可执行文件**: `/path/to/your/copilot-openai-proxy/dist/index.js`
 
 ## ⚙️ 服务配置详解
 
@@ -95,8 +95,8 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/user/桌面/code/copilot-openai-proxy
-ExecStart=/usr/bin/node /home/user/桌面/code/copilot-openai-proxy/dist/index.js
+WorkingDirectory=/path/to/your/copilot-openai-proxy
+ExecStart=/usr/bin/node /path/to/your/copilot-openai-proxy/dist/index.js
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -169,7 +169,7 @@ journalctl --user -u copilot-openai-proxy -n 100
 
 3. 检查构建是否成功：
 ```bash
-ls -la /home/user/桌面/code/copilot-openai-proxy/dist/
+ls -la /path/to/your/copilot-openai-proxy/dist/
 ```
 
 ### 服务启动但无法访问

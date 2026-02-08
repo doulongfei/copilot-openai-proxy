@@ -20,16 +20,31 @@ if [ ! -d "dist" ]; then
     fi
 fi
 
+# 获取当前工作目录
+WORKING_DIR=$(pwd)
+# 获取 Node.js 路径
+NODE_PATH=$(which node)
+
+if [ -z "$NODE_PATH" ]; then
+    echo -e "${RED}❌ 未找到 Node.js，请先安装 Node.js${NC}"
+    exit 1
+fi
+
+echo "📂 当前工作目录: $WORKING_DIR"
+echo "🟢 Node.js 路径: $NODE_PATH"
+
 # 创建用户 systemd 目录
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_USER_DIR"
 
-# 复制服务文件
-echo "📋 复制服务文件到 $SYSTEMD_USER_DIR"
-cp copilot-openai-proxy.service "$SYSTEMD_USER_DIR/"
+# 生成并安装服务文件
+echo "📋 生成并安装服务文件到 $SYSTEMD_USER_DIR"
+sed -e "s|%WORKING_DIR%|$WORKING_DIR|g" \
+    -e "s|%NODE_PATH%|$NODE_PATH|g" \
+    copilot-openai-proxy.service > "$SYSTEMD_USER_DIR/copilot-openai-proxy.service"
 
 if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ 复制服务文件失败${NC}"
+    echo -e "${RED}❌ 生成服务文件失败${NC}"
     exit 1
 fi
 
