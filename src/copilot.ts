@@ -1,4 +1,5 @@
 import fetch from 'node-fetch'
+import {randomUUID} from 'crypto'
 import {
     DeviceCodeResponse,
     AccessTokenResponse,
@@ -6,31 +7,69 @@ import {
     GitHubUserResponse,
     StoredAuth,
     ModelsResponse,
-    ModelInfo
+    ModelInfo,
+    OpenAIChatCompletionRequest
 } from './types'
 import {storage} from './storage'
 
 const GITHUB_CLIENT_ID = 'Iv1.b507a08c87ecfe98'
-const POLLING_INTERVAL = 5000 // 5 seconds
 const MAX_POLLING_ATTEMPTS = 120 // 10 minutes max
 
-const COPILOT_HEADERS = {
-    'Accept': 'application/json',
-    'Editor-Version': 'vscode/1.104.1',
-    'Editor-Plugin-Version': 'copilot-chat/0.26.7',
-    'User-Agent': 'GitHubCopilotChat/0.26.7',
-    'Copilot-Integration-Id': 'vscode-chat'
+const COPILOT_VERSION = '0.26.7'
+const EDITOR_VERSION = 'vscode/1.104.1'
+const API_VERSION = '2025-04-01'
+
+const COPILOT_HEADERS: Record<string, string> = {
+    'content-type': 'application/json',
+    'copilot-integration-id': 'vscode-chat',
+    'editor-version': EDITOR_VERSION,
+    'editor-plugin-version': `copilot-chat/${COPILOT_VERSION}`,
+    'user-agent': `GitHubCopilotChat/${COPILOT_VERSION}`,
+    'openai-intent': 'conversation-panel',
+    'x-github-api-version': API_VERSION,
+    'accept': '*/*',
+    'accept-encoding': 'gzip,deflate,br'
 }
 
 class CopilotService {
     private pollingDeviceCode: string | null = null
     private pollingAttempts = 0
 
-    // 模型缓存
+    // Model cache
     private modelsCache: ModelsResponse | null = null
     private modelsCacheTime: number = 0
-    // 24小时缓存
-    private readonly CACHE_DURATION = 24 * 60 * 60 * 1000
+    private readonly CACHE_DURATION = 24 * 60 * 60 * 1000 // 24 hours
+
+    /**
+     * Build request headers for Copilot API calls
+     */
+    buildHeaders(token: string, options?: { vision?: boolean; isAgent?: boolean }): Record<string, string> {
+        const headers: Record<string, string> = {
+            ...COPILOT_HEADERS,
+            'Authorization': `Bearer ${token}`,
+            'x-request-id': randomUUID(),
+        }
+
+        if (options?.vision) {
+            headers['copilot-vision-request'] = 'true'
+        }
+
+        if (options?.isAgent) {
+            headers['x-initiator'] = 'agent'
+        }
+
+        return headers
+    }
+
+    /**
+     * Detect if a request contains agent-pattern messages (tool role or assistant with tool_calls)
+     */
+    isAgentRequest(body: OpenAIChatCompletionRequest): boolean {
+        return body.messages.some(msg =>
+            msg.role === 'tool' ||
+            (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0)
+        )
+    }
 
     // Step 1: Get device code
     async getDeviceCode(): Promise<DeviceCodeResponse> {
@@ -164,10 +203,11 @@ class CopilotService {
             throw new Error('Not authorized. Please complete authorization first.')
         }
 
-        // Check if token is still valid (refresh 1 hour before expiry)
-        const now = Date.now()
+        // Check if token is still valid (refresh 5 minutes before expiry)
+        // Note: copilotTokenExpiresAt is in seconds (Unix timestamp), Date.now() is in milliseconds
+        const nowSeconds = Math.floor(Date.now() / 1000)
         const expiresAt = auth.copilotTokenExpiresAt || 0
-        const shouldRefresh = !auth.copilotToken || (expiresAt - now < 3600000)
+        const shouldRefresh = !auth.copilotToken || (expiresAt - nowSeconds < 300)
 
         if (shouldRefresh) {
             console.log('Refreshing Copilot token...')
@@ -203,7 +243,6 @@ class CopilotService {
     async getModels(forceRefresh = false): Promise<ModelsResponse> {
         const now = Date.now()
 
-        // 检查缓存是否有效
         if (!forceRefresh &&
             this.modelsCache &&
             (now - this.modelsCacheTime) < this.CACHE_DURATION) {
@@ -216,10 +255,7 @@ class CopilotService {
 
         const response = await fetch('https://api.githubcopilot.com/models', {
             method: 'GET',
-            headers: {
-                ...COPILOT_HEADERS,
-                'Authorization': `Bearer ${token}`
-            }
+            headers: this.buildHeaders(token)
         })
 
         if (!response.ok) {
@@ -228,66 +264,60 @@ class CopilotService {
 
         const data = await response.json() as ModelsResponse
 
-        // 更新缓存
         this.modelsCache = data
         this.modelsCacheTime = now
 
         return data
     }
 
-    // 检查模型是否支持视觉
+    // Check if model supports vision
     async isVisionModel(modelId: string): Promise<boolean> {
         try {
             const models = await this.getModels()
-
-            // 在模型列表中查找对应模型
             const model = models.data.find(m => m.id === modelId)
 
             if (!model) {
                 console.warn(`Model ${modelId} not found in models list, using fallback`)
-                // 如果找不到模型，使用后备方案（基于模型名称判断）
                 return this.isVisionModelFallback(modelId)
             }
 
-            // 检查 capabilities.supports.vision 字段（根据实际 API 响应）
             if (model.capabilities?.supports?.vision === true) {
                 console.log(`Model ${modelId} supports vision (from API)`)
                 return true
             }
 
-            // 如果 API 没有提供 vision 支持信息，返回 false
             console.log(`Model ${modelId} does not support vision (from API)`)
             return false
         } catch (error) {
             console.error('Error checking vision support:', error)
-            // 出错时使用后备方案
             return this.isVisionModelFallback(modelId)
         }
     }
 
-    // 后备的视觉模型检测（基于模型名称）
+    // Fallback vision model detection (name-based)
     private isVisionModelFallback(modelId: string): boolean {
-        // 已知支持视觉的模型名称模式
         const visionPatterns = [
             /gpt-4o/i,
             /gpt-4.*vision/i,
             /claude-3/i,
             /claude.*opus/i,
-            /gemini.*vision/i,
-            /o1/i,
-            /o1-mini/i
+            /claude.*sonnet/i,
+            /gemini/i,
+            /\bo1\b/i,
+            /\bo3\b/i,
+            /\bo4\b/i,
         ]
 
         return visionPatterns.some(pattern => pattern.test(modelId))
     }
 
-    // 获取所有支持视觉的模型列表
+    // Get all vision-capable models
     async getVisionModels(): Promise<ModelInfo[]> {
         const models = await this.getModels()
         return models.data.filter(m => m.capabilities?.supports?.vision === true)
     }
 
-    // 清除缓存（用于调试或强制刷新）
+    // Clear model cache
     clearModelsCache(): void {
         this.modelsCache = null
         this.modelsCacheTime = 0

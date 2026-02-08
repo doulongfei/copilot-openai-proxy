@@ -3,7 +3,7 @@ import path from 'path'
 import fetch from 'node-fetch'
 import {copilotService} from './copilot'
 import {storage} from './storage'
-import {OpenAIChatCompletionRequest, ClaudeMessageRequest} from './types'
+import {OpenAIChatCompletionRequest, OpenAIChatCompletionResponse, OpenAIChatCompletionChunk, ClaudeMessageRequest} from './types'
 import {authMiddleware} from './auth'
 import {FormatConverter} from './converter'
 import {Transform} from 'stream'
@@ -61,7 +61,6 @@ app.post('/api/poll-auth', async (req: Request, res: Response) => {
         const result = await copilotService.pollForAccessToken(device_code)
 
         if (result.access_token) {
-            // Complete authorization
             const auth = await copilotService.completeAuthorization(result.access_token)
             res.json({success: true, authorized: true, user: auth.user})
         } else if (result.error === 'authorization_pending') {
@@ -81,14 +80,7 @@ app.post('/api/test', async (req: Request, res: Response) => {
 
         const response = await fetch('https://api.githubcopilot.com/chat/completions', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-                'Editor-Version': 'vscode/1.104.1',
-                'Editor-Plugin-Version': 'copilot-chat/0.26.7',
-                'User-Agent': 'GitHubCopilotChat/0.26.7',
-                'Copilot-Integration-Id': 'vscode-chat'
-            },
+            headers: copilotService.buildHeaders(token),
             body: JSON.stringify({
                 model: 'gpt-4o',
                 messages: [{role: 'user', content: 'Say "Hello from Copilot!"'}],
@@ -118,12 +110,9 @@ app.get('/v1/models', authMiddleware, async (req: Request, res: Response) => {
     try {
         const modelsData = await copilotService.getModels()
 
-        // Transform Copilot API response to OpenAI format
         if (modelsData.data && Array.isArray(modelsData.data)) {
-            // Copilot API returns models in format similar to OpenAI
             res.json(modelsData)
         } else {
-            // Fallback to transformed format if structure is different
             res.json({
                 object: 'list',
                 data: modelsData
@@ -147,17 +136,20 @@ app.post('/v1/chat/completions', authMiddleware, async (req: Request, res: Respo
         const token = await copilotService.getValidCopilotToken()
         const body: OpenAIChatCompletionRequest = req.body
 
-        // 检查是否为视觉模型
+        // Check vision and agent status
         const isVision = await copilotService.isVisionModel(body.model)
-        
+        const isAgent = copilotService.isAgentRequest(body)
+
         if (isVision) {
             console.log(`Model ${body.model} supports vision`)
         }
+        if (isAgent) {
+            console.log(`Request detected as agent call (tool role or tool_calls present)`)
+        }
 
-        // 验证消息内容格式
+        // Validate multimodal content for non-vision models
         for (const message of body.messages) {
             if (Array.isArray(message.content)) {
-                // 检查是否为非视觉模型使用了多模态内容
                 if (!isVision) {
                     return res.status(400).json({
                         error: {
@@ -167,8 +159,7 @@ app.post('/v1/chat/completions', authMiddleware, async (req: Request, res: Respo
                         }
                     })
                 }
-                
-                // 验证图片内容格式
+
                 for (const part of message.content) {
                     if (part.type === 'image_url') {
                         if (!part.image_url?.url) {
@@ -185,19 +176,25 @@ app.post('/v1/chat/completions', authMiddleware, async (req: Request, res: Respo
             }
         }
 
+        const headers = copilotService.buildHeaders(token, {vision: isVision, isAgent})
+
         const response = await fetch('https://api.githubcopilot.com/chat/completions', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-                'Editor-Version': 'vscode/1.104.1',
-                'Editor-Plugin-Version': 'copilot-chat/0.26.7',
-                'User-Agent': 'GitHubCopilotChat/0.26.7',
-                'Copilot-Integration-Id': 'vscode-chat',
-                ...(isVision ? { 'copilot-vision-request': 'true' } : {})
-            },
+            headers,
             body: JSON.stringify(body)
         })
+
+        if (!response.ok) {
+            const errorText = await response.text()
+            console.error(`Copilot API error: ${response.status} - ${errorText}`)
+            let errorJson: any
+            try {
+                errorJson = JSON.parse(errorText)
+            } catch {
+                errorJson = {error: {message: errorText, type: 'upstream_error'}}
+            }
+            return res.status(response.status).json(errorJson)
+        }
 
         // Handle streaming
         if (body.stream) {
@@ -211,6 +208,7 @@ app.post('/v1/chat/completions', authMiddleware, async (req: Request, res: Respo
             res.json(data)
         }
     } catch (error) {
+        console.error('Chat completions error:', error)
         res.status(500).json({
             error: {
                 message: (error as Error).message,
@@ -246,19 +244,17 @@ app.get('/v1/models/vision', authMiddleware, async (req: Request, res: Response)
 app.post('/v1/messages', authMiddleware, async (req: Request, res: Response) => {
     try {
         console.log('[Claude API] Received request to /v1/messages')
-        
-        // 验证 anthropic-version header
+
         const anthropicVersion = req.headers['anthropic-version'] as string | undefined
         if (!anthropicVersion) {
             console.warn('[Claude API] Missing anthropic-version header')
-            // 不强制要求，但记录警告
         } else {
             console.log(`[Claude API] anthropic-version: ${anthropicVersion}`)
         }
 
         const claudeRequest = req.body as ClaudeMessageRequest
 
-        // 验证 Claude 请求格式
+        // Validate request
         const validation = FormatConverter.validateClaudeRequest(claudeRequest)
         if (!validation.valid) {
             console.error(`[Claude API] Validation failed: ${validation.error}`)
@@ -270,33 +266,25 @@ app.post('/v1/messages', authMiddleware, async (req: Request, res: Response) => 
             return res.status(error.statusCode).json(error.body)
         }
 
-        console.log(`[Claude API] Request validated - Model: ${claudeRequest.model}, Stream: ${claudeRequest.stream || false}`)
+        console.log(`[Claude API] Model: ${claudeRequest.model}, Stream: ${claudeRequest.stream || false}, Tools: ${claudeRequest.tools?.length || 0}`)
 
-        // 转换 Claude 请求为 OpenAI 格式
+        // Convert Claude request to OpenAI format
         const openAIRequest = FormatConverter.claudeToOpenAI(claudeRequest)
-        console.log(`[Claude API] Converted to OpenAI format`)
+        console.log(`[Claude API] Converted to OpenAI format - Model: ${openAIRequest.model}`)
 
-        // 获取 Copilot token
+        // Get Copilot token
         const token = await copilotService.getValidCopilotToken()
 
-        // 检查是否为视觉模型
+        // Check vision and agent status
         const isVision = await copilotService.isVisionModel(openAIRequest.model)
-        if (isVision) {
-            console.log(`[Claude API] Model ${openAIRequest.model} supports vision`)
-        }
+        const isAgent = copilotService.isAgentRequest(openAIRequest)
 
-        // 调用 Copilot API
+        const headers = copilotService.buildHeaders(token, {vision: isVision, isAgent})
+
+        // Call Copilot API
         const response = await fetch('https://api.githubcopilot.com/chat/completions', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-                'Editor-Version': 'vscode/1.104.1',
-                'Editor-Plugin-Version': 'copilot-chat/0.26.7',
-                'User-Agent': 'GitHubCopilotChat/0.26.7',
-                'Copilot-Integration-Id': 'vscode-chat',
-                ...(isVision ? { 'copilot-vision-request': 'true' } : {})
-            },
+            headers,
             body: JSON.stringify(openAIRequest)
         })
 
@@ -311,18 +299,18 @@ app.post('/v1/messages', authMiddleware, async (req: Request, res: Response) => 
             return res.status(error.statusCode).json(error.body)
         }
 
-        // 处理流式响应
+        // Handle streaming response
         if (claudeRequest.stream) {
             console.log('[Claude API] Streaming response')
-            
+
             res.setHeader('Content-Type', 'text/event-stream')
             res.setHeader('Cache-Control', 'no-cache')
             res.setHeader('Connection', 'keep-alive')
 
-            let isFirstChunk = true
+            const streamState = FormatConverter.createStreamState()
             let buffer = ''
+            let streamFinished = false
 
-            // 创建转换流
             const transformStream = new Transform({
                 transform(chunk: Buffer, encoding: string, callback: Function) {
                     try {
@@ -331,15 +319,51 @@ app.post('/v1/messages', authMiddleware, async (req: Request, res: Response) => 
                         buffer = lines.pop() || ''
 
                         for (const line of lines) {
-                            if (line.trim()) {
-                                const converted = FormatConverter.transformStreamChunk(
-                                    line + '\n',
-                                    isFirstChunk,
-                                    claudeRequest.model
-                                )
-                                if (converted) {
-                                    this.push(converted)
-                                    isFirstChunk = false
+                            if (!line.trim()) continue
+
+                            if (line.startsWith('data: ')) {
+                                const data = line.slice(6)
+
+                                if (data === '[DONE]') {
+                                    // Only emit terminal events if not already sent by finish_reason
+                                    if (!streamFinished) {
+                                        if (streamState.contentBlockOpen) {
+                                            const stopEvent = {type: 'content_block_stop' as const, index: streamState.contentBlockIndex}
+                                            this.push(`event: content_block_stop\ndata: ${JSON.stringify(stopEvent)}\n\n`)
+                                            streamState.contentBlockOpen = false
+                                        }
+                                        const deltaEvent = {
+                                            type: 'message_delta' as const,
+                                            delta: {stop_reason: 'end_turn' as const, stop_sequence: null},
+                                            usage: {input_tokens: 0, output_tokens: 0}
+                                        }
+                                        this.push(`event: message_delta\ndata: ${JSON.stringify(deltaEvent)}\n\n`)
+                                        const stopMsg = {type: 'message_stop' as const}
+                                        this.push(`event: message_stop\ndata: ${JSON.stringify(stopMsg)}\n\n`)
+                                        streamFinished = true
+                                    }
+                                    continue
+                                }
+
+                                try {
+                                    const chunk = JSON.parse(data) as OpenAIChatCompletionChunk
+                                    const events = FormatConverter.translateChunkToClaudeEvents(
+                                        chunk,
+                                        streamState,
+                                        claudeRequest.model
+                                    )
+
+                                    // Check if finish_reason was handled
+                                    if (events.some(e => e.type === 'message_stop')) {
+                                        streamFinished = true
+                                    }
+
+                                    const serialized = FormatConverter.serializeClaudeEvents(events)
+                                    if (serialized) {
+                                        this.push(serialized + '\n')
+                                    }
+                                } catch {
+                                    // Ignore parse errors
                                 }
                             }
                         }
@@ -351,17 +375,27 @@ app.post('/v1/messages', authMiddleware, async (req: Request, res: Response) => 
                 },
                 flush(callback: Function) {
                     if (buffer.trim()) {
-                        try {
-                            const converted = FormatConverter.transformStreamChunk(
-                                buffer,
-                                isFirstChunk,
-                                claudeRequest.model
-                            )
-                            if (converted) {
-                                this.push(converted)
+                        if (buffer.startsWith('data: ')) {
+                            const data = buffer.slice(6)
+                            if (data !== '[DONE]') {
+                                try {
+                                    const chunk = JSON.parse(data) as OpenAIChatCompletionChunk
+                                    const events = FormatConverter.translateChunkToClaudeEvents(
+                                        chunk,
+                                        streamState,
+                                        claudeRequest.model
+                                    )
+                                    if (events.some(e => e.type === 'message_stop')) {
+                                        streamFinished = true
+                                    }
+                                    const serialized = FormatConverter.serializeClaudeEvents(events)
+                                    if (serialized) {
+                                        this.push(serialized + '\n')
+                                    }
+                                } catch {
+                                    // Ignore
+                                }
                             }
-                        } catch (error) {
-                            console.error('[Claude API] Stream flush error:', error)
                         }
                     }
                     callback()
@@ -370,7 +404,6 @@ app.post('/v1/messages', authMiddleware, async (req: Request, res: Response) => 
 
             response.body?.pipe(transformStream).pipe(res)
 
-            // 处理错误
             transformStream.on('error', (error) => {
                 console.error('[Claude API] Transform stream error:', error)
                 res.end()
@@ -380,16 +413,16 @@ app.post('/v1/messages', authMiddleware, async (req: Request, res: Response) => 
                 console.log('[Claude API] Client closed connection')
             })
         } else {
-            // 非流式响应
+            // Non-streaming response
             console.log('[Claude API] Non-streaming response')
-            
-            const openAIResponse = await response.json()
+
+            const openAIResponse = await response.json() as OpenAIChatCompletionResponse
             const claudeResponse = FormatConverter.openAIToClaude(
                 openAIResponse,
                 claudeRequest.model
             )
 
-            console.log(`[Claude API] Response generated - Stop reason: ${claudeResponse.stop_reason}`)
+            console.log(`[Claude API] Response - Stop reason: ${claudeResponse.stop_reason}, Content blocks: ${claudeResponse.content.length}`)
             res.json(claudeResponse)
         }
     } catch (error) {
