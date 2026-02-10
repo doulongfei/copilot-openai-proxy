@@ -39,9 +39,6 @@
           <button onclick="testAPI()" class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg font-medium transition">
             测试 API
           </button>
-          <button onclick="logout()" class="bg-red-500 hover:bg-red-600 text-white px-6 py-2 rounded-lg font-medium transition">
-            退出登录
-          </button>
         </div>
       <% } else { %>
         <!-- Not Authorized Status -->
@@ -130,7 +127,7 @@ print(response.choices[0].message.content)</code></pre>
           headers: { 'Content-Type': 'application/json' }
         })
         const data = await response.json()
-        
+
         if (data.choices && data.choices[0]) {
           alert('测试成功！\n\n响应: ' + data.choices[0].message.content)
         } else {
@@ -138,17 +135,6 @@ print(response.choices[0].message.content)</code></pre>
         }
       } catch (error) {
         alert('测试失败: ' + error.message)
-      }
-    }
-
-    async function logout() {
-      if (!confirm('确定要退出登录吗？')) return
-      
-      try {
-        await fetch('/api/logout', { method: 'POST' })
-        location.reload()
-      } catch (error) {
-        alert('退出失败: ' + error.message)
       }
     }
   </script>

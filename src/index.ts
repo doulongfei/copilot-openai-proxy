@@ -95,16 +95,6 @@ app.post('/api/test', async (req: Request, res: Response) => {
     }
 })
 
-// API: Logout
-app.post('/api/logout', async (req: Request, res: Response) => {
-    try {
-        await storage.clearAuth()
-        res.json({success: true})
-    } catch (error) {
-        res.status(500).json({error: (error as Error).message})
-    }
-})
-
 // OpenAI Compatible API: List models
 app.get('/v1/models', authMiddleware, async (req: Request, res: Response) => {
     try {
